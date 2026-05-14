@@ -1,0 +1,221 @@
+// Some Test ///
+class cA {
+private:
+	int a;
+public:
+	cA(int val):a(val){}
+	cA() {}
+	~cA() { std::cout << "\ncA Destructor"; }
+
+	void set(int val) { a = val; }
+	void print() { std::cout << a << '\n'; }
+};
+
+class cB {
+private:
+	float a;
+public:
+	cB(float val) :a(val) {}
+	cB(){}
+	~cB() { std::cout << "\ncB Destructor"; }
+
+	void set(float val) { a = val; }
+	void print() { std::cout << a << '\n'; }
+};
+
+class cAB {
+private:
+	cA ca;
+	cB cb;
+
+public:
+	cAB(int va, float vb) {
+		ca.set(va);
+		ca.set(vb);
+	}
+	//~cAB() { std::cout << "\ncAB Destructor"; }
+};
+
+/////////////////////////
+class Activations {
+private:
+	Activation_Base* act_ptr;
+	ACT_TYPE act_func_type;
+
+public:
+	Activations(ACT_TYPE act_func) :act_ptr(nullptr), act_func_type(act_func) {
+		switch (act_func) {
+		case ACT_TYPE::RELU: { act_ptr = new Relu(); return; }
+		case ACT_TYPE::LEAKY_RELU: { act_ptr = new Leaky_Relu(); return; }
+		case ACT_TYPE::SIGMOID: { act_ptr = new Sigmoid(); return; }
+		default: {act_ptr = nullptr; return; }
+		}
+	}
+
+	virtual ~Activations() { delete act_ptr; }
+
+	void Forward(Tensor1f& t) const { return act_ptr->compute_Forward(t.data(), t.size()); }
+	void Forward(Tensor2f& t) const { return act_ptr->compute_Forward(t.data(), t.size()); }
+	void Forward(Tensor3f& t) const { return act_ptr->compute_Forward(t.data(), t.size()); }
+	void Forward(Tensor4f& t) const { return act_ptr->compute_Forward(t.data(), t.size()); }
+	void Forward(Eigen::Map< Matrix<float, Dynamic, Dynamic, RowMajor>>& mat){ return act_ptr->compute_Forward(mat.data(), mat.size()); }
+	
+	void Gradient(const Tensor1f& t_in, Tensor1f& t_out) const { return act_ptr->compute_Gradient(t_in.data(), t_out.data(), t_in.size()); }
+	void Gradient(const Tensor2f& t_in, Tensor2f& t_out) const { return act_ptr->compute_Gradient(t_in.data(), t_out.data(), t_in.size()); }
+	void Gradient(const Tensor3f& t_in, Tensor3f& t_out) const { return act_ptr->compute_Gradient(t_in.data(), t_out.data(), t_in.size()); }
+	void Gradient(const Tensor4f& t_in, Tensor4f& t_out) const { return act_ptr->compute_Gradient(t_in.data(), t_out.data(), t_in.size()); }
+
+};
+
+//bool Dense_FC::Forward_Pass(Matrix<float, Dynamic, Dynamic, RowMajor>& _X, Matrix<float, Dynamic, Dynamic, RowMajor>& _A)
+//{
+//	if (_X.cols() != layer_in)return false;
+//	ref_X = &_X;
+//
+//	_A = (_X * _W).rowwise() + _b;
+//	ref_Z = &_A;
+//	act_func->Forward(_A);
+//
+//	return true;
+//}
+
+Tensor2f sig_grd(const Tensor2f& t) {
+	Tensor2f res;
+	res.resize(t.dimensions());
+	int n = t.size();
+	__m256 ones = _mm256_set1_ps(1.0);
+	__m256 tmp;
+	int i = 0;
+	const float* t_ptr = t.data();
+	float* res_ptr = res.data();
+
+	for (i = 0; i <= n - 8; i += 8) {
+		tmp = _mm256_div_ps(ones, _mm256_add_ps(ones, _mm256_exp_ps(_mm256_xor_ps(_mm256_load_ps(t_ptr + i), _mm256_set1_ps(-0.f)))));
+		_mm256_store_ps(res_ptr + i, _mm256_mul_ps(tmp, _mm256_sub_ps(ones, tmp)));
+	}
+
+	float tmp_res = 0;
+	for (; i < n; i++) {
+		tmp_res = 1.0 / (1.0 + std::expf(-t_ptr[i]));
+		res_ptr[i] = tmp_res * (1.0 - tmp_res);
+	}
+
+	return res;
+}
+
+bool Convolution::Backward_Pass(Tensor4f& dout, Tensor4f& dX)
+{
+	
+	if (dout.dimension(0) != ref_X->dimension(0))return false;
+	const int m = ref_X->dimension(0);
+	const int a_nc = ref_X->dimension(1);
+	const int a_ht = ref_X->dimension(2);
+	const int a_wd = ref_X->dimension(3);
+	//const int f = w_shape.d1;
+	const int w_nc = _FC;
+	const int w_nf = num_filters;
+	const int d_nc = num_filters;
+	const int d_ht = (a_ht - _FY) / stride_xy + 1;
+	const int d_wd = (a_wd - _FX) / stride_xy + 1;
+	
+	
+	if (dout.dimension(1) * dout.dimension(2) * dout.dimension(3) != d_nc * d_ht * d_wd)return false;
+	// Reshape dout to appropriate shape //
+
+	act_func->Backprop_Inp(*ref_Z);
+	Tensor4f dZL = *ref_Z * dout;
+
+	Matrix<float, Dynamic, Dynamic, RowMajor> _X_col_T(d_ht * d_wd, a_nc * _FY * _FX);
+	Matrix<float, Dynamic, Dynamic, RowMajor> dX_col(a_nc * _FY * _FX, d_ht * d_wd);
+
+	Eigen::Map<Matrix<float, Dynamic, Dynamic, RowMajor>> mat_grads_W(grads_W.data(), w_nf, _FC * _FX * _FY);
+	mat_grads_W.setZero();
+	grads_b.setZero();
+
+	Eigen::Map<Matrix<float, Dynamic, Dynamic, RowMajor>> mat_W(_W.data(), w_nf, _FC * _FX * _FY);
+	Matrix<float, Dynamic, Dynamic, RowMajor> mat_W_T = mat_W.transpose();
+	
+	dX.resize(m, a_nc, a_ht, a_wd);
+	dX.setZero();
+
+	float* dX_ptr = dX.data();
+	float* _X_col_T_ptr = _X_col_T.data();
+	const float* w_conv_ptr = _W.data();
+	const float* aX_ptr = ref_X->data();
+	float* dX_col_ptr = dX_col.data();
+	//const float* dout_ptr = dout.data();
+
+	for (int n = 0; n < m; n++) {
+		const int ap_exm_ofst = n * a_nc * a_ht * a_wd;
+		const int ac_exm_ofst = a_nc * _FY * _FX;
+		for (int y = 0; y < d_ht; y++)
+			for (int x = 0; x < d_wd; x++)
+				for (int z = 0; z < a_nc; z++)
+					for (int fy = 0; fy < _FY; fy++)
+						for (int fx = 0; fx < _FX; fx++)
+							_X_col_T_ptr[(y * d_wd + x) * ac_exm_ofst + z * _FY * _FX + fy * _FX + fx] = aX_ptr[ap_exm_ofst + z * a_ht * a_wd + (y + fy) * a_wd + fx + x];
+
+		Eigen::Map<Matrix<float, Dynamic, Dynamic, RowMajor>> mat_dout(dZL.data() + n * d_nc * d_ht * d_wd, d_nc, d_ht * d_wd); // dZL //
+
+		mat_grads_W.noalias() += mat_dout * _X_col_T;
+
+		dX_col.noalias() = mat_W_T * mat_dout;
+
+		int dx_chn_ofst = 0;
+		int dxc_chn_ofst = 0;
+		int dx_exm_ofst = 0;
+		int dxc_img_ofst = 0;
+		for (int z = 0; z < a_nc; z++) {
+			dx_chn_ofst = z * a_ht * a_wd;
+			dxc_chn_ofst = z * _FY * _FX;
+			for (int fy = 0; fy < _FY; fy++) {
+				for (int fx = 0; fx < _FX; fx++) {
+					dxc_img_ofst = d_ht * d_wd;
+					dx_exm_ofst = n * a_nc * a_ht * a_wd;
+					for (int y = 0; y < d_ht; y++) {
+						int x = 0;
+						for (x = 0; x <= d_wd - 8; x += 8)
+							_mm256_store_ps(&dX_ptr[dx_exm_ofst + dx_chn_ofst + (y + fy) * a_wd + x + fx],
+								_mm256_add_ps(_mm256_load_ps(&dX_ptr[dx_exm_ofst + dx_chn_ofst + (y + fy) * a_wd + x + fx]),
+									_mm256_load_ps(&dX_col_ptr[(dxc_chn_ofst + fy * _FX + fx) * dxc_img_ofst + y * d_wd + x])));
+
+						for (; x < d_wd; x++)
+							dX_ptr[dx_exm_ofst + dx_chn_ofst + (y + fy) * a_wd + x + fx] += dX_col_ptr[(dxc_chn_ofst + fy * _FX + fx) * dxc_img_ofst + y * d_wd + x];
+
+					}
+				}
+			}
+		}
+
+		grads_b.noalias() += mat_dout.rowwise().sum();
+	}
+
+	mat_grads_W.noalias() = mat_grads_W / m;
+	grads_b.noalias() = grads_b / m;
+
+	return true;
+}
+
+### Model INIT ####
+/*switch (model_layers_param[0].l_type) {
+    case LAYER_TYPE::DENSE: {
+        tmp = model_layers_param[0];
+        model_layers.push_back(new Dense_FC(m_in_shape.prod(), tmp.params[0],
+            static_cast<ACT_TYPE>(tmp.params[1]), static_cast<REGULARIZATION>(tmp.params[2])));
+        break;
+    }
+    case LAYER_TYPE::CONV: {
+        tmp = model_layers_param[0];
+        model_layers.push_back(new Convolution(tmp.params[0], tmp.params[1], tmp.params[2], tmp.params[3],
+            static_cast<ACT_TYPE>(tmp.params[4]), static_cast<REGULARIZATION>(tmp.params[5])));
+        break;
+    }
+    case LAYER_TYPE::MAX_POOL: {
+        tmp = model_layers_param[0];
+        model_layers.push_back(new Max_Pool_2D(tmp.params[0], tmp.params[1], tmp.params[2]));
+        break;
+    }
+    default: {return false; }
+    }*/
+
+    //Eigen::ArrayXi next_inp_shp = model_layers[0]->Out_shape(m_in_shape);

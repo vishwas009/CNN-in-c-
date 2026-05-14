@@ -1,0 +1,22 @@
+#### TODO  #####
+
+Error Checking  ****
+Code Review ****
+
+Layers:-
+Regularization,
+Weight Update,
+Error checking
+Parellize Conv and Dense Forward functions for EIGEN_DONT_PARALLELIZE *****
+
+Loss Functions
+Weights Random Initialization
+
+Model:-
+Better Layer adding process 
+Define functions
+//Change ArrayXi to VectoXi  for input Shape
+Back_Propagation
+
+//Cost Functions
+Optimizer Algos
